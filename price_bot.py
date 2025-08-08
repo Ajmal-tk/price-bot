@@ -29,9 +29,10 @@ class PriceBot:
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.search_product))
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Send a message when the command /start is issued."""
+        """Send a personalised message when the command /start is issued."""
+        user_first_name = update.effective_user.first_name if update.effective_user else "there"
         await update.message.reply_text(
-            'Hi! I am your Price Comparison Bot.\n'
+            f'Hi {user_first_name}! I am your Price Comparison Bot.\n'
             'Send me a product name to compare prices across Indian online stores.\n'
             'Example: iPhone 13'
         )
@@ -51,19 +52,19 @@ class PriceBot:
         product_name = update.message.text
         
         # Get prices from different stores
-        flipkart_price = await self.get_flipkart_price(product_name)
-        amazon_price = await self.get_amazon_price(product_name)
+        flipkart_result = await self.get_flipkart_price(product_name)
+        amazon_result = await self.get_amazon_price(product_name)
         
         # Format and send the response
         response = f"Price Comparison for: {product_name}\n\n"
         
-        if flipkart_price:
-            response += f"Flipkart: {flipkart_price}\n"
+        if flipkart_result:
+            response += f"Flipkart: {flipkart_result}\n"
         else:
             response += "Flipkart: Not found\n"
         
-        if amazon_price:
-            response += f"Amazon: {amazon_price}\n"
+        if amazon_result:
+            response += f"Amazon: {amazon_result}\n"
         else:
             response += "Amazon: Not found\n"
         
@@ -79,10 +80,13 @@ class PriceBot:
             response = requests.get(search_url, headers=headers)
             soup = BeautifulSoup(response.text, 'html.parser')
             
-            # Find the first product price
+            # Extract first product title & price
+            title_elem = soup.find('div', {'class': '_4rR01T'}) or soup.find('a', {'class': 's1Q9rs'})
             price_elem = soup.find('div', {'class': '_30jeq3 _1_WHN1'})
-            if price_elem:
-                return price_elem.text
+            if title_elem and price_elem:
+                title = title_elem.text.strip()
+                price = price_elem.text.strip()
+                return f"{title} - {price}"
             return None
         except Exception as e:
             print(f"Error fetching Flipkart price: {e}")
@@ -98,10 +102,13 @@ class PriceBot:
             response = requests.get(search_url, headers=headers)
             soup = BeautifulSoup(response.text, 'html.parser')
             
-            # Find the first product price
+            # Extract first product title & price
+            title_elem = soup.find('span', {'class': 'a-size-medium a-color-base a-text-normal'})
             price_elem = soup.find('span', {'class': 'a-price-whole'})
-            if price_elem:
-                return price_elem.text
+            if title_elem and price_elem:
+                title = title_elem.text.strip()
+                price = price_elem.text.strip()
+                return f"{title} - {price}"
             return None
         except Exception as e:
             print(f"Error fetching Amazon price: {e}")
