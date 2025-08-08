@@ -6,6 +6,17 @@ import requests
 from bs4 import BeautifulSoup
 import re
 
+import threading, http.server, socketserver, os
+
+def start_http_server():
+    port = int(os.getenv("PORT", 10000))
+    handler = http.server.SimpleHTTPRequestHandler
+    with socketserver.TCPServer(("", port), handler) as httpd:
+        print(f"Health-check server running on port {port}")
+        httpd.serve_forever()
+
+
+
 class PriceBot:
     def __init__(self):
         load_dotenv()
@@ -100,6 +111,8 @@ class PriceBot:
         """Start the bot."""
         self.application.run_polling(allowed_updates=Update.ALL_TYPES)
 
-if __name__ == '__main__':
-    bot = PriceBot()
-    bot.run()
+if __name__ == "__main__":
+    threading.Thread(target=start_http_server, daemon=True).start()
+    PriceBot().run()
+
+bot.run()
