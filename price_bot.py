@@ -1,6 +1,6 @@
 import os
 from dotenv import load_dotenv
-from telegram import Update, BotCommand, ReplyKeyboardMarkup
+from telegram import Update, BotCommand, ReplyKeyboardMarkup, MenuButtonCommands
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 import requests
 from bs4 import BeautifulSoup
@@ -27,6 +27,12 @@ class PriceBot:
             BotCommand("start", "Greet & show instructions"),
             BotCommand("help", "How to use the bot"),
         ])
+        # Ensure the blue Menu button shows command list
+        try:
+            self.application.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+        except Exception as e:
+            # Not critical; log and continue
+            print(f"Unable to set chat menu button: {e}")
         
         # Add command handlers
         self.application.add_handler(CommandHandler("start", self.start))
@@ -92,8 +98,9 @@ class PriceBot:
             soup = BeautifulSoup(response.text, 'html.parser')
             
             # Extract first product title & price
-            title_elem = soup.find('div', {'class': '_4rR01T'}) or soup.find('a', {'class': 's1Q9rs'})
-            price_elem = soup.find('div', {'class': '_30jeq3 _1_WHN1'})
+            product_block = soup.select_one('div._1AtVbE div._4rR01T, div._1AtVbE a.s1Q9rs')
+            title_elem = product_block
+            price_elem = product_block.find_next('div', {'class': '_30jeq3'}) if product_block else None
             if title_elem and price_elem:
                 title = title_elem.text.strip()
                 price = price_elem.text.strip()
@@ -114,8 +121,9 @@ class PriceBot:
             soup = BeautifulSoup(response.text, 'html.parser')
             
             # Extract first product title & price
-            title_elem = soup.find('span', {'class': 'a-size-medium a-color-base a-text-normal'})
-            price_elem = soup.find('span', {'class': 'a-price-whole'})
+            result = soup.select_one('div.s-result-item')
+            title_elem = result.select_one('span.a-size-medium') if result else None
+            price_elem = result.select_one('span.a-price-whole') if result else None
             if title_elem and price_elem:
                 title = title_elem.text.strip()
                 price = price_elem.text.strip()
