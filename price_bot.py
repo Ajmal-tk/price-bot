@@ -113,6 +113,5 @@ class PriceBot:
 
 if __name__ == "__main__":
     threading.Thread(target=start_http_server, daemon=True).start()
-    PriceBot().run()
-
-bot.run()
+    bot = PriceBot()
+    bot.run()
