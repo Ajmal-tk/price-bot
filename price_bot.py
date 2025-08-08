@@ -1,6 +1,6 @@
 import os
 from dotenv import load_dotenv
-from telegram import Update
+from telegram import Update, BotCommand, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 import requests
 from bs4 import BeautifulSoup
@@ -22,6 +22,11 @@ class PriceBot:
         load_dotenv()
         self.token = os.getenv('TELEGRAM_BOT_TOKEN')
         self.application = Application.builder().token(self.token).build()
+        # Register bot commands for slash menu
+        self.application.bot.set_my_commands([
+            BotCommand("start", "Greet & show instructions"),
+            BotCommand("help", "How to use the bot"),
+        ])
         
         # Add command handlers
         self.application.add_handler(CommandHandler("start", self.start))
@@ -29,12 +34,18 @@ class PriceBot:
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.search_product))
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Send a personalised message when the command /start is issued."""
-        user_first_name = update.effective_user.first_name if update.effective_user else "there"
+        """Send a personalised message and show quick-command buttons."""
+        user_first_name = update.effective_user.first_name or "there"
+
+        keyboard = ReplyKeyboardMarkup([
+            ["/help"]
+        ], resize_keyboard=True, one_time_keyboard=True)
+
         await update.message.reply_text(
             f'Hi {user_first_name}! I am your Price Comparison Bot.\n'
             'Send me a product name to compare prices across Indian online stores.\n'
-            'Example: iPhone 13'
+            'Example: iPhone 13',
+            reply_markup=keyboard
         )
 
     async def help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
