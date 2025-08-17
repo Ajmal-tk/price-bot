@@ -33,8 +33,8 @@ class PriceFetcher:
             time.sleep(3)  # Wait for page to load
             
             # Get first product details
-            product = self.driver.find_element(By.CLASS_NAME, "_4rR01T")
-            price = self.driver.find_element(By.CLASS_NAME, "_30jeq3._1_WHN1")
+            product = self.driver.find_element(By.CLASS_NAME, "KzDlHZ")
+            price = self.driver.find_element(By.CLASS_NAME, "_Nx9bqj _4b5DiR")
             
             return {
                 "store": "Flipkart",
