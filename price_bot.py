@@ -13,7 +13,7 @@ for key, value in os.environ.items():
         print(f"{key} = {value}")
 print("=============================")
 
-print("DEBUG: BOT_TOKEN from env is:", repr(os.getenv("BOT_TOKEN")))
+print("chk  edit DEBUG: BOT_TOKEN from env is:", repr(os.getenv("BOT_TOKEN")))
 # Import our BS4-based fetcher
 from price_fetcher import PriceFetcher
 
