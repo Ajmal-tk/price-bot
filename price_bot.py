@@ -7,6 +7,8 @@ from dotenv import load_dotenv
 from telegram import Update, BotCommand, ReplyKeyboardMarkup, MenuButtonCommands
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
+
+print("DEBUG: BOT_TOKEN from env is:", repr(os.getenv("BOT_TOKEN")))
 # Import our BS4-based fetcher
 from price_fetcher import PriceFetcher
 
