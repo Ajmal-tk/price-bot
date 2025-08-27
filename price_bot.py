@@ -7,6 +7,11 @@ from dotenv import load_dotenv
 from telegram import Update, BotCommand, ReplyKeyboardMarkup, MenuButtonCommands
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
+print("==== DEBUG ENV VARIABLES ====")
+for key, value in os.environ.items():
+    if "TOKEN" in key or "BOT" in key:   # filter sensitive-ish vars
+        print(f"{key} = {value}")
+print("=============================")
 
 print("DEBUG: BOT_TOKEN from env is:", repr(os.getenv("BOT_TOKEN")))
 # Import our BS4-based fetcher
