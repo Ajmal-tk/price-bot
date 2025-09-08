@@ -7,13 +7,7 @@ from dotenv import load_dotenv
 from telegram import Update, BotCommand, ReplyKeyboardMarkup, MenuButtonCommands
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
-print("==== DEBUG ENV VARIABLES ====")
-for key, value in os.environ.items():
-    if "TOKEN" in key or "BOT" in key:   # filter sensitive-ish vars
-        print(f"{key} = {value}")
-print("=============================")
-
-print("DEBUG: BOT_TOKEN from env is:", repr(os.getenv("TELEGRAM_BOT_TOKEN")))
+BOT_WEBHOOK_URL = os.getenv("BOT_WEBHOOK_URL")  # Optional: set to run via webhook instead of polling
 # Import our BS4-based fetcher
 from price_fetcher import PriceFetcher
 
@@ -120,8 +114,25 @@ class PriceBot:
             return f"{result['product_name']} - {result['price']}"
         return None
 
+    async def run_webhook(self):
+        # Run as webhook if BOT_WEBHOOK_URL is provided
+        port = int(os.getenv("PORT", 8080))
+        url_path = self.token
+        await self.application.start()
+        await self.application.bot.set_webhook(url=f"{BOT_WEBHOOK_URL}/{url_path}")
+        await self.application.updater.start_webhook(
+            listen="0.0.0.0",
+            port=port,
+            url_path=url_path,
+            webhook_url=f"{BOT_WEBHOOK_URL}/{url_path}",
+        )
+        await self.application.updater.idle()
+
     def run(self):
-        self.application.run_polling(allowed_updates=Update.ALL_TYPES)
+        if BOT_WEBHOOK_URL:
+            asyncio.run(self.run_webhook())
+        else:
+            self.application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == "__main__":
