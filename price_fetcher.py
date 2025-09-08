@@ -1,143 +1,170 @@
-import os
-import asyncio
-import threading
-import http.server
-import socketserver
-from dotenv import load_dotenv
-from telegram import Update, BotCommand, ReplyKeyboardMarkup, MenuButtonCommands
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+import requests
+from bs4 import BeautifulSoup
+import random
+from urllib.parse import quote_plus
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
-BOT_WEBHOOK_URL = os.getenv("BOT_WEBHOOK_URL")  # Optional: set to run via webhook instead of polling
-# Import our BS4-based fetcher
-from price_fetcher import PriceFetcher
+USER_AGENTS = [
+    # A small pool of modern desktop UAs to reduce trivial blocking
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+]
 
+def build_headers() -> dict:
+    return {
+        "User-Agent": random.choice(USER_AGENTS),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Connection": "close",
+        "DNT": "1",
+        "Upgrade-Insecure-Requests": "1",
+    }
 
-def start_http_server():
-    """Simple HTTP server for Render health check"""
-    port = int(os.getenv("PORT", 10000))
-    handler = http.server.SimpleHTTPRequestHandler
-    with socketserver.TCPServer(("", port), handler) as httpd:
-        print(f"Health-check server running on port {port}")
-        httpd.serve_forever()
+def build_session() -> requests.Session:
+    session = requests.Session()
+    retries = Retry(
+        total=5,
+        backoff_factor=0.8,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"],
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retries)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
 
-
-class PriceBot:
-    def __init__(self):
-        load_dotenv()
-        self.token = os.getenv("TELEGRAM_BOT_TOKEN")
-        self.application = Application.builder().token(self.token).build()
-
-        # Our price fetcher instance
-        self.fetcher = PriceFetcher()
-
-        # Register bot commands
-        self.setup_commands = [
-            BotCommand("start", "Greet & show instructions"),
-            BotCommand("help", "How to use the bot"),
-        ]
-
-        # Handlers
-        self.application.add_handler(CommandHandler("start", self.start))
-        self.application.add_handler(CommandHandler("help", self.help))
-        self.application.add_handler(
-            MessageHandler(filters.TEXT & ~filters.COMMAND, self.search_product)
-        )
-
-        # Post init
-        self.application.post_init = self.post_init
-
-    async def post_init(self, application):
+def resilient_get(session: requests.Session, url: str, headers: dict, timeout_read: float = 35.0):
+    """Perform a GET with manual retries and jitter to reduce transient timeouts."""
+    attempts = 3
+    for attempt in range(1, attempts + 1):
         try:
-            await application.bot.set_my_commands(self.setup_commands)
-            await application.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+            # Vary UA across attempts a bit
+            attempt_headers = dict(headers)
+            attempt_headers["User-Agent"] = random.choice(USER_AGENTS)
+            # (connect timeout, read timeout)
+            resp = session.get(url, headers=attempt_headers, timeout=(5.0, timeout_read))
+            return resp
+        except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectTimeout, requests.exceptions.RequestException):
+            if attempt == attempts:
+                raise
+            try:
+                import time
+                time.sleep(0.6 + random.random() * 0.6)
+            except Exception:
+                pass
+    return None
+
+class PriceFetcher:
+
+    def search_flipkart(self, query: str) -> dict | None:
+        """Search for product on Flipkart"""
+        url = f"https://www.flipkart.com/search?q={quote_plus(query)}"
+
+        try:
+            session = build_session()
+            res = resilient_get(session, url, headers=build_headers(), timeout_read=40.0)
+            soup = BeautifulSoup(res.text, "html.parser")
+
+            # Basic anti-bot/captcha guard
+            page_text = soup.get_text(" ", strip=True).lower()
+            if "captcha" in page_text or "unusual traffic" in page_text:
+                return None
+
+            # First product title
+            # Flipkart has multiple card layouts
+            # Large card layout
+            card = soup.select_one("div._2kHMtA")
+            if card:
+                title_el = card.select_one("div._4rR01T")
+                price_el = card.select_one("div._30jeq3")
+            else:
+                # Small tile layout
+                card = soup.select_one("a.s1Q9rs")
+                title_el = card if card else None
+                # Price nearby in small layout
+                price_el = None
+                if card:
+                    parent = card.find_parent()
+                    if parent:
+                        price_el = parent.select_one("div._30jeq3")
+
+            title = title_el
+            price = price_el
+
+            if not title or not price:
+                return None
+
+            return {
+                "store": "Flipkart",
+                "product_name": title.get_text(strip=True),
+                "price": price.get_text(strip=True),
+                "url": url
+            }
+
         except Exception as e:
-            print(f"Warning: Could not set up bot commands/menu: {e}")
+            print(f"Flipkart error: {e}")
+            return None
 
-    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Start command"""
-        user_first_name = update.effective_user.first_name or "there"
-        keyboard = ReplyKeyboardMarkup([["/help"]], resize_keyboard=True)
-        await update.message.reply_text(
-            f"Hi {user_first_name}! I am your Price Comparison Bot.\n"
-            "Send me a product name to compare prices across Amazon & Flipkart.\n"
-            "Example: iPhone 13",
-            reply_markup=keyboard,
-        )
+    def search_amazon(self, query: str) -> dict | None:
+        """Search for product on Amazon India"""
+        url = f"https://www.amazon.in/s?k={quote_plus(query)}"
 
-    async def help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Help instructions"""
-        await update.message.reply_text(
-            "To use this bot:\n"
-            "1. Send a product name\n"
-            "2. I'll search Amazon and Flipkart\n"
-            "3. I'll send you the price comparison\n\n"
-            "Example: iPhone 13"
-        )
+        try:
+            session = build_session()
+            headers = build_headers()
+            # Hint to Amazon locale
+            headers["Accept-Language"] = "en-IN,en;q=0.9"
+            res = resilient_get(session, url, headers=headers, timeout_read=40.0)
+            soup = BeautifulSoup(res.text, "html.parser")
 
-    async def search_product(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Search product on Amazon & Flipkart"""
-        product_name = update.message.text
+            # Basic anti-bot page guard
+            page_text = soup.get_text(" ", strip=True).lower()
+            if "robot check" in page_text or "enter the characters" in page_text or "captcha" in page_text:
+                return None
 
-        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+            # Prefer using first search result container for consistent extraction
+            result = soup.select_one('div.s-main-slot div[data-component-type="s-search-result"]')
+            title = None
+            price = None
+            if result:
+                title = result.select_one("h2 a span")
+                # Multiple price markups possible
+                price = (
+                    result.select_one("span.a-price > span.a-offscreen") or
+                    result.select_one("span.a-price-whole")
+                )
+            else:
+                # Fallback: page-wide selectors
+                title = soup.select_one("h2 a span")
+                price = soup.select_one("span.a-price > span.a-offscreen") or soup.select_one("span.a-price-whole")
 
-        # Search in parallel with asyncio
-        flipkart_result, amazon_result = await asyncio.gather(
-            self.get_flipkart_price(product_name), self.get_amazon_price(product_name)
-        )
+            if not title or not price:
+                return None
 
-        response = f"🔍 *Price Comparison for: {product_name}*\n\n"
+            return {
+                "store": "Amazon",
+                "product_name": title.get_text(strip=True),
+                "price": price.get_text(strip=True),
+                "url": url
+            }
 
-        if flipkart_result:
-            response += f"🛒 *Flipkart*: {flipkart_result}\n"
-        else:
-            response += "❌ *Flipkart*: Not available\n"
+        except Exception as e:
+            print(f"Amazon error: {e}")
+            return None
 
-        if amazon_result:
-            response += f"📦 *Amazon*: {amazon_result}\n"
-        else:
-            response += "❌ *Amazon*: Not available\n"
+    def search_all(self, query: str) -> list:
+        """Search across all stores"""
+        results = []
 
-        # Note
-        response += "\n_Note: Results may vary, prices are live._"
+        flipkart = self.search_flipkart(query)
+        if flipkart:
+            results.append(flipkart)
 
-        await update.message.reply_text(response, parse_mode="Markdown")
+        amazon = self.search_amazon(query)
+        if amazon:
+            results.append(amazon)
 
-    async def get_flipkart_price(self, product_name: str) -> str | None:
-        result = self.fetcher.search_flipkart(product_name)
-        if result:
-            return f"{result['product_name']} - {result['price']}"
-        return None
-
-    async def get_amazon_price(self, product_name: str) -> str | None:
-        result = self.fetcher.search_amazon(product_name)
-        if result:
-            return f"{result['product_name']} - {result['price']}"
-        return None
-
-    async def run_webhook(self):
-        # Run as webhook if BOT_WEBHOOK_URL is provided
-        port = int(os.getenv("PORT", 8080))
-        url_path = self.token
-        await self.application.start()
-        await self.application.bot.set_webhook(url=f"{BOT_WEBHOOK_URL}/{url_path}")
-        await self.application.updater.start_webhook(
-            listen="0.0.0.0",
-            port=port,
-            url_path=url_path,
-            webhook_url=f"{BOT_WEBHOOK_URL}/{url_path}",
-        )
-        await self.application.updater.idle()
-
-    def run(self):
-        if BOT_WEBHOOK_URL:
-            asyncio.run(self.run_webhook())
-        else:
-            self.application.run_polling(allowed_updates=Update.ALL_TYPES)
-
-
-if __name__ == "__main__":
-    # Start health check server
-    threading.Thread(target=start_http_server, daemon=True).start()
-
-    bot = PriceBot()
-    bot.run()
+        return results
