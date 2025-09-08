@@ -1,25 +1,77 @@
 import requests
 from bs4 import BeautifulSoup
 import random
+from urllib.parse import quote_plus
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept-Language": "en-US,en;q=0.9"
-}
+USER_AGENTS = [
+    # A small pool of modern desktop UAs to reduce trivial blocking
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+]
+
+def build_headers() -> dict:
+    return {
+        "User-Agent": random.choice(USER_AGENTS),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Connection": "close",
+        "DNT": "1",
+        "Upgrade-Insecure-Requests": "1",
+    }
+
+def build_session() -> requests.Session:
+    session = requests.Session()
+    retries = Retry(
+        total=3,
+        backoff_factor=0.5,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"],
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retries)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
 
 class PriceFetcher:
 
     def search_flipkart(self, query: str) -> dict | None:
         """Search for product on Flipkart"""
-        url = f"https://www.flipkart.com/search?q={query.replace(' ', '+')}"
+        url = f"https://www.flipkart.com/search?q={quote_plus(query)}"
 
         try:
-            res = requests.get(url, headers=HEADERS, timeout=10)
+            session = build_session()
+            res = session.get(url, headers=build_headers(), timeout=15)
             soup = BeautifulSoup(res.text, "html.parser")
 
+            # Basic anti-bot/captcha guard
+            page_text = soup.get_text(" ", strip=True).lower()
+            if "captcha" in page_text or "unusual traffic" in page_text:
+                return None
+
             # First product title
-            title = soup.select_one("div._4rR01T") or soup.select_one("a.s1Q9rs")  # mobiles OR electronics
-            price = soup.select_one("div._30jeq3")
+            # Flipkart has multiple card layouts
+            # Large card layout
+            card = soup.select_one("div._2kHMtA")
+            if card:
+                title_el = card.select_one("div._4rR01T")
+                price_el = card.select_one("div._30jeq3")
+            else:
+                # Small tile layout
+                card = soup.select_one("a.s1Q9rs")
+                title_el = card if card else None
+                # Price nearby in small layout
+                price_el = None
+                if card:
+                    parent = card.find_parent()
+                    if parent:
+                        price_el = parent.select_one("div._30jeq3")
+
+            title = title_el
+            price = price_el
 
             if not title or not price:
                 return None
@@ -37,15 +89,36 @@ class PriceFetcher:
 
     def search_amazon(self, query: str) -> dict | None:
         """Search for product on Amazon India"""
-        url = f"https://www.amazon.in/s?k={query.replace(' ', '+')}"
+        url = f"https://www.amazon.in/s?k={quote_plus(query)}"
 
         try:
-            res = requests.get(url, headers=HEADERS, timeout=10)
+            session = build_session()
+            headers = build_headers()
+            # Hint to Amazon locale
+            headers["Accept-Language"] = "en-IN,en;q=0.9"
+            res = session.get(url, headers=headers, timeout=15)
             soup = BeautifulSoup(res.text, "html.parser")
 
-            # First product title and price
-            title = soup.select_one("h2 a span")
-            price = soup.select_one("span.a-price-whole")
+            # Basic anti-bot page guard
+            page_text = soup.get_text(" ", strip=True).lower()
+            if "robot check" in page_text or "enter the characters" in page_text or "captcha" in page_text:
+                return None
+
+            # Prefer using first search result container for consistent extraction
+            result = soup.select_one('div.s-main-slot div[data-component-type="s-search-result"]')
+            title = None
+            price = None
+            if result:
+                title = result.select_one("h2 a span")
+                # Multiple price markups possible
+                price = (
+                    result.select_one("span.a-price > span.a-offscreen") or
+                    result.select_one("span.a-price-whole")
+                )
+            else:
+                # Fallback: page-wide selectors
+                title = soup.select_one("h2 a span")
+                price = soup.select_one("span.a-price > span.a-offscreen") or soup.select_one("span.a-price-whole")
 
             if not title or not price:
                 return None
