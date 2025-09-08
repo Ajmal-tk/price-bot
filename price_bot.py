@@ -6,6 +6,7 @@ import socketserver
 from dotenv import load_dotenv
 from telegram import Update, BotCommand, ReplyKeyboardMarkup, MenuButtonCommands
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from urllib.parse import quote_plus
 
 BOT_WEBHOOK_URL = os.getenv("BOT_WEBHOOK_URL")  # Optional: set to run via webhook instead of polling
 # Import our BS4-based fetcher
@@ -87,32 +88,27 @@ class PriceBot:
 
         response = f"🔍 *Price Comparison for: {product_name}*\n\n"
 
-        if flipkart_result:
-            response += f"🛒 *Flipkart*: {flipkart_result}\n"
-        else:
-            response += "❌ *Flipkart*: Not available\n"
-
-        if amazon_result:
-            response += f"📦 *Amazon*: {amazon_result}\n"
-        else:
-            response += "❌ *Amazon*: Not available\n"
+        response += f"🛒 *Flipkart*: {flipkart_result}\n"
+        response += f"📦 *Amazon*: {amazon_result}\n"
 
         # Note
         response += "\n_Note: Results may vary, prices are live._"
 
         await update.message.reply_text(response, parse_mode="Markdown")
 
-    async def get_flipkart_price(self, product_name: str) -> str | None:
+    async def get_flipkart_price(self, product_name: str) -> str:
+        url = f"https://www.flipkart.com/search?q={quote_plus(product_name)}"
         result = self.fetcher.search_flipkart(product_name)
         if result:
-            return f"{result['product_name']} - {result['price']}"
-        return None
+            return f"{result['product_name']} - {result['price']} (Link: {url})"
+        return f"Not available (Link: {url})"
 
-    async def get_amazon_price(self, product_name: str) -> str | None:
+    async def get_amazon_price(self, product_name: str) -> str:
+        url = f"https://www.amazon.in/s?k={quote_plus(product_name)}"
         result = self.fetcher.search_amazon(product_name)
         if result:
-            return f"{result['product_name']} - {result['price']}"
-        return None
+            return f"{result['product_name']} - {result['price']} (Link: {url})"
+        return f"Not available (Link: {url})"
 
     async def run_webhook(self):
         # Run as webhook if BOT_WEBHOOK_URL is provided
