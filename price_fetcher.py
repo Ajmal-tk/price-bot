@@ -99,6 +99,7 @@ class PriceFetcher:
 
             title = None
             price = None
+            image = None
             # Try direct selectors first
             for sel in title_candidates:
                 node = soup.select_one(sel)
@@ -114,6 +115,11 @@ class PriceFetcher:
                         if price_node and price_node.get_text(strip=True):
                             price = price_node
                             break
+                    # Try image close to title
+                    if not image:
+                        img = container.select_one("img._396cs4, img._2r_T1I, img._2r_T1I._396cs4")
+                        if img and img.get("src"):
+                            image = img.get("src")
             # Fallback: page-wide price search
             if not price:
                 for psel in price_candidates:
@@ -121,6 +127,10 @@ class PriceFetcher:
                     if price_node and price_node.get_text(strip=True):
                         price = price_node
                         break
+            if not image:
+                img = soup.select_one("img._396cs4, img._2r_T1I, img.Dy+kKf")
+                if img and img.get("src"):
+                    image = img.get("src")
 
             # Last resort: scan likely result containers for first ₹ price
             if (not title or not price):
@@ -141,6 +151,10 @@ class PriceFetcher:
                             # synthesize a price-like element
                             from bs4 import NavigableString
                             price = NavigableString("₹" + m.group(1))
+                    if not image:
+                        img = c.select_one("img._396cs4, img._2r_T1I")
+                        if img and img.get("src"):
+                            image = img.get("src")
                     if title and price:
                         break
 
@@ -155,6 +169,10 @@ class PriceFetcher:
                     m_soup = BeautifulSoup(m_res.text, "html.parser")
                     m_title = m_soup.select_one("div._4rR01T, a.s1Q9rs, div.KzDlHZ, a.IRpwTa, div.xtXmba")
                     m_price = m_soup.select_one("div._30jeq3, div.Nx9bqj, div._25b18c > div._30jeq3")
+                    if not image:
+                        m_img = m_soup.select_one("img._396cs4, img._2r_T1I")
+                        if m_img and m_img.get("src"):
+                            image = m_img.get("src")
                     if m_title and m_price:
                         title = m_title
                         price = m_price
@@ -169,7 +187,8 @@ class PriceFetcher:
                 "store": "Flipkart",
                 "product_name": title.get_text(strip=True),
                 "price": price.get_text(strip=True),
-                "url": url
+                "url": url,
+                "image_url": image
             }
 
         except Exception as e:
@@ -196,6 +215,7 @@ class PriceFetcher:
             result = soup.select_one('div.s-main-slot div[data-component-type="s-search-result"]')
             title = None
             price = None
+            image = None
             if result:
                 title = (
                     result.select_one("h2 a span") or
@@ -208,6 +228,10 @@ class PriceFetcher:
                     result.select_one("span.a-price-whole") or
                     result.select_one("span.a-price .a-offscreen")
                 )
+                # Image
+                img = result.select_one("img.s-image, img.s-img")
+                if img and (img.get("src") or img.get("data-src")):
+                    image = img.get("src") or img.get("data-src")
             else:
                 # Fallback: page-wide selectors
                 title = (
@@ -220,6 +244,10 @@ class PriceFetcher:
                     soup.select_one("span.a-price-whole") or
                     soup.select_one("span.a-price .a-offscreen")
                 )
+                if not image:
+                    img = soup.select_one("img.s-image, img.s-img")
+                    if img and (img.get("src") or img.get("data-src")):
+                        image = img.get("src") or img.get("data-src")
 
             # If still missing, try alternate sort or mobile site when blocked
             if (not title or not price) and blocked:
@@ -239,6 +267,10 @@ class PriceFetcher:
                             result.select_one("span.a-price-whole") or
                             result.select_one("span.a-price .a-offscreen")
                         )
+                        if not image:
+                            img = result.select_one("img.s-image, img.s-img")
+                            if img and (img.get("src") or img.get("data-src")):
+                                image = img.get("src") or img.get("data-src")
                         url = alt_url
                 except Exception:
                     pass
@@ -254,6 +286,10 @@ class PriceFetcher:
                     if result:
                         title = result.select_one("h2 a span")
                         price = result.select_one("span.a-price > span.a-offscreen") or result.select_one("span.a-price-whole")
+                        if not image:
+                            img = result.select_one("img.s-image, img.s-img")
+                            if img and (img.get("src") or img.get("data-src")):
+                                image = img.get("src") or img.get("data-src")
                         url = m_url
                 except Exception:
                     pass
@@ -265,7 +301,8 @@ class PriceFetcher:
                 "store": "Amazon",
                 "product_name": title.get_text(strip=True),
                 "price": price.get_text(strip=True),
-                "url": url
+                "url": url,
+                "image_url": image
             }
 
         except Exception as e:
