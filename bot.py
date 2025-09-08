@@ -1,4 +1,5 @@
 import os
+import asyncio
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -87,4 +88,4 @@ async def main() -> None:
     await application.run_polling()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
