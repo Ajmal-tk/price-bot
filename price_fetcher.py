@@ -74,25 +74,51 @@ class PriceFetcher:
                 return None
 
             # First product title
-            # Flipkart has multiple card layouts
-            # Large card layout
-            card = soup.select_one("div._2kHMtA")
-            if card:
-                title_el = card.select_one("div._4rR01T")
-                price_el = card.select_one("div._30jeq3")
-            else:
-                # Small tile layout
-                card = soup.select_one("a.s1Q9rs")
-                title_el = card if card else None
-                # Price nearby in small layout
-                price_el = None
-                if card:
-                    parent = card.find_parent()
-                    if parent:
-                        price_el = parent.select_one("div._30jeq3")
+            # Flipkart has multiple card layouts; try several selectors
+            title_candidates = [
+                # Large card layout (mobiles and many categories)
+                "div._4rR01T",
+                # Small tile layout (electronics)
+                "a.s1Q9rs",
+                # Newer small tile title class
+                "div.KzDlHZ",
+                # Another common anchor title class
+                "a.IRpwTa",
+            ]
+            price_candidates = [
+                # Common price class in large layout
+                "div._30jeq3",
+                # Newer price class observed in small tiles
+                "div.Nx9bqj",
+                # Sometimes nested inside price container
+                "div._25b18c > div._30jeq3",
+                # Fallback: any element with rupee symbol near title
+            ]
 
-            title = title_el
-            price = price_el
+            title = None
+            price = None
+            # Try direct selectors first
+            for sel in title_candidates:
+                node = soup.select_one(sel)
+                if node and node.get_text(strip=True):
+                    title = node
+                    break
+            if title:
+                # Prefer price close to title
+                container = title.find_parent()
+                if container:
+                    for psel in price_candidates:
+                        price_node = container.select_one(psel)
+                        if price_node and price_node.get_text(strip=True):
+                            price = price_node
+                            break
+            # Fallback: page-wide price search
+            if not price:
+                for psel in price_candidates:
+                    price_node = soup.select_one(psel)
+                    if price_node and price_node.get_text(strip=True):
+                        price = price_node
+                        break
 
             if not title or not price:
                 return None
@@ -130,16 +156,29 @@ class PriceFetcher:
             title = None
             price = None
             if result:
-                title = result.select_one("h2 a span")
+                title = (
+                    result.select_one("h2 a span") or
+                    result.select_one("span.a-size-medium.a-color-base.a-text-normal") or
+                    result.select_one("span.a-size-base-plus.a-color-base.a-text-normal")
+                )
                 # Multiple price markups possible
                 price = (
                     result.select_one("span.a-price > span.a-offscreen") or
-                    result.select_one("span.a-price-whole")
+                    result.select_one("span.a-price-whole") or
+                    result.select_one("span.a-price .a-offscreen")
                 )
             else:
                 # Fallback: page-wide selectors
-                title = soup.select_one("h2 a span")
-                price = soup.select_one("span.a-price > span.a-offscreen") or soup.select_one("span.a-price-whole")
+                title = (
+                    soup.select_one("h2 a span") or
+                    soup.select_one("span.a-size-medium.a-color-base.a-text-normal") or
+                    soup.select_one("span.a-size-base-plus.a-color-base.a-text-normal")
+                )
+                price = (
+                    soup.select_one("span.a-price > span.a-offscreen") or
+                    soup.select_one("span.a-price-whole") or
+                    soup.select_one("span.a-price .a-offscreen")
+                )
 
             if not title or not price:
                 return None
