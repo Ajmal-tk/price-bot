@@ -17,6 +17,7 @@ def build_headers() -> dict:
         "User-Agent": random.choice(USER_AGENTS),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
         "Connection": "close",
         "DNT": "1",
         "Upgrade-Insecure-Requests": "1",
@@ -68,10 +69,9 @@ class PriceFetcher:
             res = resilient_get(session, url, headers=build_headers(), timeout_read=40.0)
             soup = BeautifulSoup(res.text, "html.parser")
 
-            # Basic anti-bot/captcha guard
+            # Basic anti-bot/captcha guard (do not hard-fail; continue to try pattern fallback)
             page_text = soup.get_text(" ", strip=True).lower()
-            if "captcha" in page_text or "unusual traffic" in page_text:
-                return None
+            blocked = ("captcha" in page_text or "unusual traffic" in page_text)
 
             # First product title
             # Flipkart has multiple card layouts; try several selectors
@@ -84,6 +84,8 @@ class PriceFetcher:
                 "div.KzDlHZ",
                 # Another common anchor title class
                 "a.IRpwTa",
+                # Another observed title container
+                "div.xtXmba",
             ]
             price_candidates = [
                 # Common price class in large layout
@@ -120,6 +122,46 @@ class PriceFetcher:
                         price = price_node
                         break
 
+            # Last resort: scan likely result containers for first ₹ price
+            if (not title or not price):
+                import re
+                containers = soup.select("div._2kHMtA, div._1AtVbE, div.tUxRFH")
+                for c in containers[:5]:
+                    if not title:
+                        t = (
+                            c.select_one("div._4rR01T") or c.select_one("a.s1Q9rs") or
+                            c.select_one("div.KzDlHZ") or c.select_one("a.IRpwTa") or c.select_one("div.xtXmba")
+                        )
+                        if t and t.get_text(strip=True):
+                            title = t
+                    if not price:
+                        text = c.get_text(" ", strip=True)
+                        m = re.search(r"₹\s?([\d,]+)", text)
+                        if m:
+                            # synthesize a price-like element
+                            from bs4 import NavigableString
+                            price = NavigableString("₹" + m.group(1))
+                    if title and price:
+                        break
+
+            # If desktop failed and we suspect blocked, try mobile site once
+            if (not title or not price) and blocked:
+                try:
+                    m_url = f"https://m.flipkart.com/search?q={quote_plus(query)}"
+                    m_headers = build_headers()
+                    # Force mobile UA
+                    m_headers["User-Agent"] = "Mozilla/5.0 (Linux; Android 10; SM-G970F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+                    m_res = resilient_get(session, m_url, headers=m_headers, timeout_read=40.0)
+                    m_soup = BeautifulSoup(m_res.text, "html.parser")
+                    m_title = m_soup.select_one("div._4rR01T, a.s1Q9rs, div.KzDlHZ, a.IRpwTa, div.xtXmba")
+                    m_price = m_soup.select_one("div._30jeq3, div.Nx9bqj, div._25b18c > div._30jeq3")
+                    if m_title and m_price:
+                        title = m_title
+                        price = m_price
+                        url = m_url
+                except Exception:
+                    pass
+
             if not title or not price:
                 return None
 
@@ -146,10 +188,9 @@ class PriceFetcher:
             res = resilient_get(session, url, headers=headers, timeout_read=40.0)
             soup = BeautifulSoup(res.text, "html.parser")
 
-            # Basic anti-bot page guard
+            # Basic anti-bot page guard (continue with fallbacks rather than hard return)
             page_text = soup.get_text(" ", strip=True).lower()
-            if "robot check" in page_text or "enter the characters" in page_text or "captcha" in page_text:
-                return None
+            blocked = ("robot check" in page_text or "enter the characters" in page_text or "captcha" in page_text)
 
             # Prefer using first search result container for consistent extraction
             result = soup.select_one('div.s-main-slot div[data-component-type="s-search-result"]')
@@ -179,6 +220,43 @@ class PriceFetcher:
                     soup.select_one("span.a-price-whole") or
                     soup.select_one("span.a-price .a-offscreen")
                 )
+
+            # If still missing, try alternate sort or mobile site when blocked
+            if (not title or not price) and blocked:
+                try:
+                    alt_url = f"https://www.amazon.in/s?k={quote_plus(query)}&s=price-asc-rank"
+                    alt_res = resilient_get(session, alt_url, headers=headers, timeout_read=40.0)
+                    alt = BeautifulSoup(alt_res.text, "html.parser")
+                    result = alt.select_one('div.s-main-slot div[data-component-type="s-search-result"]')
+                    if result:
+                        title = (
+                            result.select_one("h2 a span") or
+                            result.select_one("span.a-size-medium.a-color-base.a-text-normal") or
+                            result.select_one("span.a-size-base-plus.a-color-base.a-text-normal")
+                        )
+                        price = (
+                            result.select_one("span.a-price > span.a-offscreen") or
+                            result.select_one("span.a-price-whole") or
+                            result.select_one("span.a-price .a-offscreen")
+                        )
+                        url = alt_url
+                except Exception:
+                    pass
+
+            if (not title or not price) and blocked:
+                try:
+                    m_url = f"https://m.amazon.in/s?k={quote_plus(query)}"
+                    m_headers = dict(headers)
+                    m_headers["User-Agent"] = "Mozilla/5.0 (Linux; Android 10; SM-G970F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+                    m_res = resilient_get(session, m_url, headers=m_headers, timeout_read=40.0)
+                    m = BeautifulSoup(m_res.text, "html.parser")
+                    result = m.select_one('div.s-main-slot div[data-component-type="s-search-result"]')
+                    if result:
+                        title = result.select_one("h2 a span")
+                        price = result.select_one("span.a-price > span.a-offscreen") or result.select_one("span.a-price-whole")
+                        url = m_url
+                except Exception:
+                    pass
 
             if not title or not price:
                 return None
