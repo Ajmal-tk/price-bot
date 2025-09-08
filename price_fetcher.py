@@ -25,8 +25,8 @@ def build_headers() -> dict:
 def build_session() -> requests.Session:
     session = requests.Session()
     retries = Retry(
-        total=3,
-        backoff_factor=0.5,
+        total=5,
+        backoff_factor=0.8,
         status_forcelist=[429, 500, 502, 503, 504],
         allowed_methods=["GET"],
         raise_on_status=False,
@@ -36,6 +36,27 @@ def build_session() -> requests.Session:
     session.mount("https://", adapter)
     return session
 
+def resilient_get(session: requests.Session, url: str, headers: dict, timeout_read: float = 35.0):
+    """Perform a GET with manual retries and jitter to reduce transient timeouts."""
+    attempts = 3
+    for attempt in range(1, attempts + 1):
+        try:
+            # Vary UA across attempts a bit
+            attempt_headers = dict(headers)
+            attempt_headers["User-Agent"] = random.choice(USER_AGENTS)
+            # (connect timeout, read timeout)
+            resp = session.get(url, headers=attempt_headers, timeout=(5.0, timeout_read))
+            return resp
+        except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectTimeout, requests.exceptions.RequestException):
+            if attempt == attempts:
+                raise
+            try:
+                import time
+                time.sleep(0.6 + random.random() * 0.6)
+            except Exception:
+                pass
+    return None
+
 class PriceFetcher:
 
     def search_flipkart(self, query: str) -> dict | None:
@@ -44,7 +65,7 @@ class PriceFetcher:
 
         try:
             session = build_session()
-            res = session.get(url, headers=build_headers(), timeout=15)
+            res = resilient_get(session, url, headers=build_headers(), timeout_read=40.0)
             soup = BeautifulSoup(res.text, "html.parser")
 
             # Basic anti-bot/captcha guard
@@ -96,7 +117,7 @@ class PriceFetcher:
             headers = build_headers()
             # Hint to Amazon locale
             headers["Accept-Language"] = "en-IN,en;q=0.9"
-            res = session.get(url, headers=headers, timeout=15)
+            res = resilient_get(session, url, headers=headers, timeout_read=40.0)
             soup = BeautifulSoup(res.text, "html.parser")
 
             # Basic anti-bot page guard
