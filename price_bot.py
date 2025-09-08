@@ -100,14 +100,16 @@ class PriceBot:
         url = f"https://www.flipkart.com/search?q={quote_plus(product_name)}"
         result = self.fetcher.search_flipkart(product_name)
         if result:
-            return f"{result['product_name']} - {result['price']} (Link: {url})"
+            img = f"\n[Image]({result['image_url']})" if result.get('image_url') else ""
+            return f"{result['product_name']} - {result['price']} (Link: {url}){img}"
         return f"Not available (Link: {url})"
 
     async def get_amazon_price(self, product_name: str) -> str:
         url = f"https://www.amazon.in/s?k={quote_plus(product_name)}"
         result = self.fetcher.search_amazon(product_name)
         if result:
-            return f"{result['product_name']} - {result['price']} (Link: {url})"
+            img = f"\n[Image]({result['image_url']})" if result.get('image_url') else ""
+            return f"{result['product_name']} - {result['price']} (Link: {url}){img}"
         return f"Not available (Link: {url})"
 
     async def run_webhook(self):
